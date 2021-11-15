@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from models.common import generate_it, UPSCALE, PFRB
 
+
 class UNIT(nn.Module): 
     def __init__(self, kind='successor', basic_feature=64, num_frame=3, num_b=5, scale=4, act=nn.LeakyReLU(0.2,True)):
         super(UNIT, self).__init__()
@@ -48,6 +49,7 @@ class UNIT(nn.Module):
         it_sr = self.upscale(ht)
 
         return it_sr, ht
+
 
 class Net(nn.Module):
     def __init__(self, config):
