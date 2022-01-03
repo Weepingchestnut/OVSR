@@ -20,7 +20,8 @@ def ddp_func(demo_fn, config):
              nprocs=len(config.gpus),
              join=True)
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--options', type=str, default='./options/ovsr.yml')
     cfg = parser.parse_args()
@@ -28,9 +29,10 @@ if __name__=='__main__':
     with open(cfg.options, 'r', encoding="utf-8") as config_file:
         config = yaml.safe_load(config_file.read())
         config = DICT2OBJ(config)
-        
+
     gpus = config.gpus
-    os.environ["CUDA_VISIBLE_DEVICES"] = reduce(lambda x, y: str(x) + ', ' + str(y), gpus[1:], str(gpus[0]) if len(gpus) > 0 else '-1')
+    os.environ["CUDA_VISIBLE_DEVICES"] = reduce(lambda x, y: str(x) + ', ' + str(y), gpus[1:],
+                                                str(gpus[0]) if len(gpus) > 0 else '-1')
     config.seed = random.randint(1, 10000)
 
     config.path.checkpoint = join(config.path.base, config.path.checkpoint, config.model.name)
@@ -44,7 +46,8 @@ if __name__=='__main__':
 
     if config.function == 'get_complexity':
         macs, params = get_model_complexity_info(config.network, (3, 1, 180, 320), as_strings=False,
-                                                print_per_layer_stat=False, verbose=True, ignore_modules=[torch.nn.LeakyReLU, torch.nn.ReLU, torch.nn.PReLU])
+                                                 print_per_layer_stat=False, verbose=True,
+                                                 ignore_modules=[torch.nn.LeakyReLU, torch.nn.ReLU, torch.nn.PReLU])
         print('Computational complexity: {:,}'.format(macs))
         print('Number of parameters: {:,}'.format(params))
         exit()
