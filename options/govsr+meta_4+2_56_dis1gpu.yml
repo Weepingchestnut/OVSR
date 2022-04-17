@@ -1,14 +1,19 @@
 function: 'train' # train, test, get_complexity
+#function: 'get_complexity' # train, test, get_complexity
 
 path:
   base: './'
   train: './data/filelist_train.txt'   # use .txt file, or the folder of your data like /xxx/data
-  eval: './data/filelist_val.txt'
-  test: '/xxx/data'
-  checkpoint: 'checkpoint'
-  eval_result: 'eval'
+  eval: './data/filelist_eval.txt'
+#  eval: './data/filelist_eval_vid4.txt'
+#  test: '/xxx/data'
+  test: '/home/lzk/workspace/OVSR/data/Vid4/calendar/truth'
+  checkpoint: 'checkpoint/dis1gpu'
+  eval_result: 'eval/dis1gpu'
 
-gpus: [0, 1]
+#gpus: [0, 1]
+gpus: [0]
+#gpu_id: 0
 data_kind: 'single'    # single for hr only, double for lr and hr
 
 train:
@@ -22,25 +27,27 @@ train:
   epoch_decay: 240       # number of epochs from init_lr to final_lr
   loss: 'cha_loss'       # cha_loss, MSELoss, L1Loss
   alpha: 0.01            # hyper-parameter to adjust the weight of precursor in loss, 0.01 and 0.1 for global and local should be fine
-  num_epochs: 800        # max number of epochs for training
+  num_epochs: 1000        # max number of epochs for training
   num_workers: 4
   iter_per_epoch: 500    # iterations per epoch
   display_iter: 20       # iterations to print info
-  epoch: 0               # current eopch, updated during training
+  epoch: 0               # current epoch, updated during training
 
 eval:
   num_workers: 4
   batch_size: 1
+  save_all_sr: 0          # 1: save all SR sequence; 0: only save one SR frame
 
 test:
-  save_name: 'govsr_8+4_80'       # name to save test results
+  save_name: 'govsr_4+2_56_vid4_calendar'       # name to save test results
 
 model:
   file: 'ovsr'                    # name of model file (models/ovsr.py)
-  name: 'govsr_8+4_80'            # name to save/load checkpoint and evaluation, change it for different settings
+  name: 'govsr_4+2_56'            # name to save/load checkpoint and evaluation, change it for different settings
   kind: 'global'                  # local or global
+  meta_upscale: 1                 # 1: use meta-upscale module; 0: use official upscale module
   num_frame: 3                    # we adopt one frame from the past, present, and future respectively
   scale: 4
-  num_pb: 8                       # number of residual blocks in the precursor
-  num_sb: 4                       # number of residual blocks in the successor
-  basic_filter: 80                # number of filters for conv layer
+  num_pb: 4                       # number of residual blocks in the precursor
+  num_sb: 2                       # number of residual blocks in the successor
+  basic_filter: 56                # number of filters for conv layer

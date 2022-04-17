@@ -4,3 +4,5 @@ work_dir/
 data/
 eval/
 mytest/
+eval_govsr_4+2_56_1gpu.txt
+eval_govsr_4+2_56.txt

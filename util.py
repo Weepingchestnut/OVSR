@@ -12,6 +12,8 @@ import torch
 from torch.nn import functional as F
 import json
 
+from mytest.numpy_test import numpy_test
+
 
 def automkdir(path):
     if not exists(path):
@@ -77,6 +79,14 @@ def makelr_fromhr_cuda(hr, scale=4, device=None, data_kind='single'):
         return lr, hr
 
 
+def save_all_srframe(cleans, config):
+    sr_all = [(np.round(np.clip(cleans[0].cpu().numpy()[0, i] * 255, 0, 255))).astype(np.uint8)
+              for i in range(config.train.num_frame)]
+    # print("sr_all[0].shape: ", sr_all[0].shape)
+    for num_frames in range(config.train.num_frame):
+        cv2_imsave(join(config.path.eval_result, '{:0>4}.png'.format(num_frames)), sr_all[num_frames])
+
+
 def evaluation(model, eval_data, config):
     model.eval()
     start = torch.cuda.Event(enable_timing=True)
@@ -93,27 +103,36 @@ def evaluation(model, eval_data, config):
 
     for iter_eval, (img_hq) in enumerate(tqdm(eval_data)):
         img_hq = img_hq[:, :, :, bd * scale: (bd + in_h) * scale, bd * scale: (bd + in_w) * scale]
+        # img_hq: torch.Size([1, 3, 9, 512, 960])
         img_lq, img_hq = makelr_fromhr_cuda(img_hq, scale, device, config.data_kind)
         # img_lq = img_lq[:, :, :, :in_h, :in_w]
         # img_hq = img_hq[:, :, :, :in_h*scale, :in_w*scale]
 
-        B, C, T, H, W = img_lq.shape
+        B, C, T, H, W = img_lq.shape    # img_lq: torch.Size([1, 3, 9, 128, 240])
 
         start.record()
         with torch.no_grad():
             img_clean = model(img_lq)
+            # print("img_clean = ", img_clean.size())
         end.record()
-        torch.cuda.synchronize()
+        torch.cuda.synchronize()    # test model inference time more correct
         test_runtime.append(start.elapsed_time(end) / T)
 
         cleans = [_.permute(0, 2, 3, 4, 1) for _ in img_clean]
+        # print("len(cleans) = ", len(cleans))      # len(cleans) = 2
         hr = img_hq.permute(0, 2, 3, 4, 1)
+        # print("hr = ", hr.size())     # hr = torch.Size([1, 9, 512, 960, 3])
 
         psnr_cleans, psnr_hr = cleans, hr
         psnrs = [compute_psnr_torch(_, psnr_hr).cpu().numpy() for _ in psnr_cleans]
-
-        clean = (np.round(np.clip(cleans[0].cpu().numpy()[0, T // 2] * 255, 0, 255))).astype(np.uint8)
-        cv2_imsave(join(config.path.eval_result, '{:0>4}.png'.format(iter_eval)), clean)
+        # numpy_test(cleans[0].cpu().numpy())      # test
+        if config.eval.save_all_sr == 1:    # save all SR sequences
+            save_all_srframe(cleans, config)
+        else:
+            clean = (np.round(np.clip(cleans[0].cpu().numpy()[0, T // 2] * 255, 0, 255))).astype(np.uint8)
+            cv2_imsave(join(config.path.eval_result, '{:0>4}.png'.format(iter_eval)), clean)
+        # clean = (np.round(np.clip(cleans[0].cpu().numpy()[0, T // 2] * 255, 0, 255))).astype(np.uint8)
+        # cv2_imsave(join(config.path.eval_result, '{:0>4}.png'.format(iter_eval)), clean)
         psnr_all.append(psnrs)
 
     psnrs = np.array(psnr_all)
@@ -179,8 +198,24 @@ def test_video(model, path, savepath, config):
     return
 
 
+def save_checkpoint_psnr(model, epoch, model_folder, psnr):
+    # --------------------------------------------------------------
+    # checkpoint file's name example:
+    #       print('{:0>4}_psnr-{:.4f}.pth'.format(1, 31.11119999))
+    # --------------------------------------------------------------
+    # model_out_path = os.path.join(model_folder, '{:0>4}.pth'.format(epoch))
+    model_out_path = os.path.join(model_folder, '{:0>4}_psnr-{:.4f}.pth'.format(epoch, psnr))
+    state = {"epoch": epoch, "model": model.state_dict()}
+    if not os.path.exists(model_folder):
+        os.makedirs(model_folder)
+    torch.save(state, model_out_path)
+    print("Checkpoint saved to {}".format(model_out_path))
+
+    return
+
+
 def save_checkpoint(model, epoch, model_folder):
-    model_out_path = os.path.join(model_folder, '{:0>4}.pth'.format(epoch))
+    model_out_path = os.path.join(model_folder , '{:0>4}.pth'.format(epoch))
     state = {"epoch": epoch, "model": model.state_dict()}
     if not os.path.exists(model_folder):
         os.makedirs(model_folder)
@@ -211,6 +246,7 @@ def load_checkpoint(network=None, resume='', path='', weights_init=None, rank=0)
             print("=> no checkpoint found at '{}'".format(resume))
             if weights_init is not None:
                 network.apply(weights_init)
+                # print("weights_init")
             start_epoch = 0
 
     return start_epoch
@@ -256,4 +292,6 @@ class DICT2OBJ(object):
 
 
 if __name__ == '__main__':
+    # print('{:0>4}_psnr-{:.4f}.pth'.format(1, 31.11119999))
+    # test_video()
     pass

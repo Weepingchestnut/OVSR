@@ -22,19 +22,20 @@ train:
   in_size: 64            # patch_size of LR frames during training
   init_lr: 1.e-3         # initial learning rate, and you may lower it
   final_lr: 1.e-4        # decays to the final learning rate after {epoch_decay} epochs
-  epoch_decay: 240       # number of epochs from init_lr to final_lr
+  epoch_decay: 60       # number of epochs from init_lr to final_lr
   loss: 'cha_loss'       # cha_loss, MSELoss, L1Loss
   alpha: 0.01            # hyper-parameter to adjust the weight of precursor in loss, 0.01 and 0.1 for global and local should be fine
-  num_epochs: 800        # max number of epochs for training
+  num_epochs: 2000        # max number of epochs for training
   num_workers: 4
   iter_per_epoch: 500    # iterations per epoch
 #  iter_per_epoch: 40    # iterations per epoch
   display_iter: 20       # iterations to print info
-  epoch: 0               # current eopch, updated during training
+  epoch: 0               # current epoch, updated during training
 
 eval:
   num_workers: 4
   batch_size: 1
+  save_all_sr: 0          # 1: save all SR sequence; 0: only save one SR frame
 
 test:
   save_name: 'govsr_4+2_56'       # name to save test results

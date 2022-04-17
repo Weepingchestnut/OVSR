@@ -17,7 +17,7 @@ import torch.optim
 from torch.cuda.amp import autocast, GradScaler
 from torch import autograd
 from util import automkdir, adjust_learning_rate, evaluation, load_checkpoint, save_checkpoint, makelr_fromhr_cuda, \
-    test_video
+    test_video, save_checkpoint_psnr
 import dataloader
 from models.common import weights_init, cha_loss
 
@@ -40,6 +40,7 @@ def setup(rank, world_size):
     else:
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = '23456'
+        # os.environ['MASTER_PORT'] = '29501'
 
         # initialize the process group
         dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -92,7 +93,7 @@ def train(rank, config):
     loss_frame_seq = list(range(config.train.sub_frame, config.train.num_frame - config.train.sub_frame))
     alpha = config.train.alpha
 
-    while (epoch < config.train.num_epochs):
+    while epoch < config.train.num_epochs:
         if step == 0:
             adjust_learning_rate(config.train.init_lr, config.train.final_lr, epoch, epoch_decay, step % iter_per_epoch,
                                  iter_per_epoch, optimizer, True)
@@ -139,11 +140,17 @@ def train(rank, config):
 
                     epoch += 1
                     config.train.epoch = epoch
-                    save_checkpoint(model, epoch, config.path.checkpoint)
+                    # print("max_psnr =", max_psnr)
+                    psnr_avg = evaluation(model, eval_loader, config).tolist()[0]
+                    save_checkpoint_psnr(model, epoch, config.path.checkpoint, psnr_avg)
+                    # if psnr_avg > max_psnr:
+                    #     save_checkpoint_psnr(model, epoch, config.path.checkpoint, psnr_avg)
+                    #     max_psnr = psnr_avg
+                    print("="*100)
 
                 dist.barrier()
                 if rank == 0:
-                    evaluation(model, eval_loader, config)
+                    # evaluation(model, eval_loader, config)
                     if epoch == config.train.num_epochs:
                         raise Exception(f'epoch {epoch} >= max epoch {config.train.num_epochs}')
                     time_start = time.time()
@@ -165,7 +172,7 @@ def test(rank, config):
     start_epoch = load_checkpoint(model, config.path.resume, config.path.checkpoint, weights_init, rank)
 
     datapath = sorted(glob.glob(join(config.path.test, '*')))
-    datapath = [d for d in datapath if os.path.isdir(d)][rank:: world_size]
+    # datapath = [d for d in datapath if os.path.isdir(d)][rank:: world_size]
     seqname = [os.path.split(d)[-1] for d in datapath]
     savepath = [join(config.path.test, d, config.test.save_name) for d in seqname]
 

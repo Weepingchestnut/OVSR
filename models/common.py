@@ -51,24 +51,24 @@ class UPSCALE(nn.Module):
 
 
 class PFRB(nn.Module):
-    '''
+    """
     Progressive Fusion Residual Block
     Progressive Fusion Video Super-Resolution Network via Exploiting Non-Local Spatio-Temporal Correlations, ICCV 2019
-    '''
+    """
 
     def __init__(self, basic_feature=64, num_channel=3, act=torch.nn.LeakyReLU(0.2, True)):
         super(PFRB, self).__init__()
-        self.bf = basic_feature
-        self.nc = num_channel
+        self.bf = basic_feature     # bf = 56
+        self.nc = num_channel       # nc = 3
         self.act = act
         self.conv0 = nn.Sequential(*[nn.Conv2d(self.bf, self.bf, 3, 1, 3 // 2) for _ in range(num_channel)])
         self.conv1 = nn.Conv2d(self.bf * num_channel, self.bf, 1, 1, 1 // 2)
         self.conv2 = nn.Sequential(*[nn.Conv2d(self.bf * 2, self.bf, 3, 1, 3 // 2) for _ in range(num_channel)])
 
     def forward(self, x):
-        x1 = [self.act(self.conv0[i](x[i])) for i in range(self.nc)]
-        merge = torch.cat(x1, 1)
-        base = self.act(self.conv1(merge))
+        x1 = [self.act(self.conv0[i](x[i])) for i in range(self.nc)]    # x[0]: hc; x[1]: hsup; x[2]: ht_past
+        merge = torch.cat(x1, 1)    # torch.Size([16, 168, 64, 64])
+        base = self.act(self.conv1(merge))      # 1x1Conv: torch.Size([16, 56, 64, 64])
         x2 = [torch.cat([base, i], 1) for i in x1]
         x2 = [self.act(self.conv2[i](x2[i])) for i in range(self.nc)]
 

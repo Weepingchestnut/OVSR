@@ -14,7 +14,7 @@ from torch.cuda.amp import GradScaler, autocast
 import dataloader
 from models.common import weights_init, cha_loss
 from util import DICT2OBJ, automkdir, load_checkpoint, adjust_learning_rate, evaluation, makelr_fromhr_cuda, \
-    save_checkpoint
+    save_checkpoint, save_checkpoint_psnr
 
 
 def train(gpu_id, config):
@@ -115,9 +115,12 @@ def train(gpu_id, config):
                 epoch += 1
                 config.train.epoch = epoch
                 if psnr_avg > max_psnr:
-                    save_checkpoint(model, epoch, config.path.checkpoint, psnr_avg)
+                    save_checkpoint_psnr(model, epoch, config.path.checkpoint, psnr_avg)
                     max_psnr = psnr_avg
-                print("~" * 100)
+                    print("~"*30)
+                    print("max psnr:", max_psnr)
+                    print("~"*30)
+                print("=" * 100)
 
                 # dist.barrier()
                 # if gpu_id == 0:
@@ -126,11 +129,12 @@ def train(gpu_id, config):
                     raise Exception(f'epoch {epoch} >= max epoch {config.train.num_epochs}')
                 time_start = time.time()
                 print(f'Epoch={epoch}, lr={optimizer.param_groups[0]["lr"]}')
+                # print("@"*100)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--options', type=str, default='./options/ovsr.yml')
+    parser.add_argument('--options', type=str, default='./options/govsr_4+2_56.yml')
     cfg = parser.parse_args()
 
     with open(cfg.options, 'r', encoding="utf-8") as config_file:

@@ -23,7 +23,7 @@ def ddp_func(demo_fn, config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--options', type=str, default='./options/ovsr.yml')
+    parser.add_argument('--options', type=str, default='./options/govsr_4+2_56_dis1gpu.yml')
     cfg = parser.parse_args()
 
     with open(cfg.options, 'r', encoding="utf-8") as config_file:
