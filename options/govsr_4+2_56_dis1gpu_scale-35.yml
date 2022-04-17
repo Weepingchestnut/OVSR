@@ -37,14 +37,14 @@ eval:
   save_all_sr: 0          # 1: save all SR sequence; 0: only save one SR frame
 
 test:
-  save_name: 'govsr_4+2_56'       # name to save test results (scale-35 means scale is 3.5)
+  save_name: 'govsr_4+2_56_scale-35'       # name to save test results (scale-35 means scale is 3.5)
 
 model:
   file: 'ovsr'                    # name of model file (models/ovsr.py)
-  name: 'govsr_4+2_56'            # name to save/load checkpoint and evaluation, change it for different settings
+  name: 'govsr_4+2_56_scale-35'   # name to save/load checkpoint and evaluation, change it for different settings
   kind: 'global'                  # local or global
   num_frame: 3                    # we adopt one frame from the past, present, and future respectively
-  scale: 4
+  scale: 3.5
   num_pb: 4                       # number of residual blocks in the precursor
   num_sb: 2                       # number of residual blocks in the successor
   basic_filter: 56                # number of filters for conv layer
