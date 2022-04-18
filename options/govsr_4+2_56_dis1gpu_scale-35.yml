@@ -12,7 +12,8 @@ path:
 #gpus: [0, 1]
 gpus: [0]
 #gpu_id: 0
-data_kind: 'single'    # single for hr only, double for lr and hr
+data_kind: 'single'       # single for hr only, double for lr and hr
+data_downsample: 'bi'     # bi: bicubic_pytorch; bd: duf_downsample
 
 train:
   resume: -999           # -999 to load the latest checkpoint
@@ -37,11 +38,11 @@ eval:
   save_all_sr: 0          # 1: save all SR sequence; 0: only save one SR frame
 
 test:
-  save_name: 'govsr_4+2_56_scale-35'       # name to save test results (scale-35 means scale is 3.5)
+  save_name: 'work_dir/govsr_4+2_56_bi_scale-35'       # name to save test results (scale-35 means scale is 3.5)
 
 model:
   file: 'ovsr'                    # name of model file (models/ovsr.py)
-  name: 'govsr_4+2_56_scale-35'   # name to save/load checkpoint and evaluation, change it for different settings
+  name: 'govsr_4+2_56_bi_scale-35'   # name to save/load checkpoint and evaluation, change it for different settings
   kind: 'global'                  # local or global
   num_frame: 3                    # we adopt one frame from the past, present, and future respectively
   scale: 3.5

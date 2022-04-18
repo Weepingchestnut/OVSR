@@ -72,7 +72,7 @@ def train(gpu_id, config):
                                  iter_per_epoch, optimizer, False)
             optimizer.zero_grad()
 
-            img_lq, img_hq = makelr_fromhr_cuda(img_hq, config.model.scale, device, config.data_kind)
+            img_lq, img_hq = makelr_fromhr_cuda(img_hq, config.model.scale, device, config.data_kind, config.data_downsample)
 
             with autocast():  # Automatic Mixed Precision Training
                 it_all, pre_it_all = model(img_lq, config.train.sub_frame)

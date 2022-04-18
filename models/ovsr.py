@@ -76,6 +76,7 @@ class Net(nn.Module):
 
     def forward(self, x, start=0):
         B, C, T, H, W = x.shape
+        # B, T, C, H, W = x.shape
         """
             print("x.shape =", x.shape)
             val: x.shape = torch.Size([1, 3, 9, 128, 240])

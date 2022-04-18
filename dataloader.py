@@ -75,7 +75,7 @@ def single_load(hr, mode='train', crop_size=32, scale=4, num_frame=7):
         idx_st = 15 - num_frame // 2
     index = list(range(idx_st, idx_st + num_frame))
 
-    hr_img = np.array([cv2_imread(hr[i]) for i in index])
+    hr_img = np.array([cv2_imread(hr[i]) for i in index])   # hr_img.shape = {tuple} (9, 792, 1920, 3)
     if mode == 'train':
         hr_img = single_crop(hr_img, size=crop_size)
 
@@ -114,8 +114,9 @@ class loader(data.Dataset):
             LR = torch.from_numpy(LR / 255.).float().permute(3, 0, 1, 2)
         else:
             HR = single_load(self.hqfiles[index], mode=self.mode, crop_size=self.crop_size,
-                             scale=self.scale, num_frame=self.num_frame)
-        HR = torch.from_numpy(HR / 255.).float().permute(3, 0, 1, 2)
+                             scale=self.scale, num_frame=self.num_frame)    # {ndarray}, shape = (9, 792, 1920, 3), value is RGB
+        HR = torch.from_numpy(HR / 255.).float().permute(3, 0, 1, 2)    # {Tensor}, shape = torch.Size([3, 9, 792, 1920]), value is RGB/255.
+        # HR = torch.from_numpy(HR / 255.).float().permute(0, 3, 1, 2)        # {Tensor}, shape = torch.Size([9, 3, 792, 1920])
 
         if self.data_kind == 'double':
             return LR, HR

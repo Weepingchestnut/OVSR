@@ -17,7 +17,7 @@ import torch.optim
 from torch.cuda.amp import autocast, GradScaler
 from torch import autograd
 from util import automkdir, adjust_learning_rate, evaluation, load_checkpoint, save_checkpoint, makelr_fromhr_cuda, \
-    test_video, save_checkpoint_psnr
+    test_video, save_checkpoint_psnr, BI_resize
 import dataloader
 from models.common import weights_init, cha_loss
 
@@ -106,10 +106,14 @@ def train(rank, config):
                                  iter_per_epoch, optimizer, False)
             optimizer.zero_grad()
 
-            img_lq, img_hq = makelr_fromhr_cuda(img_hq, config.model.scale, device, config.data_kind)
+            img_lq, img_hq = makelr_fromhr_cuda(img_hq, config.model.scale, device, config.data_kind, config.data_downsample)
 
             with autocast():  # Automatic Mixed Precision Training
                 it_all, pre_it_all = model(img_lq, config.train.sub_frame)
+                if type(config.model.scale) is not int:
+                    it_all = BI_resize(it_all, (img_hq.size(3), img_hq.size(4)))
+                    pre_it_all = BI_resize(pre_it_all, (img_hq.size(3), img_hq.size(4)))
+
                 loss = criterion(it_all, img_hq[:, :, loss_frame_seq]) + alpha * criterion(pre_it_all,
                                                                                            img_hq[:, :, loss_frame_seq])
 

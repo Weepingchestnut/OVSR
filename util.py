@@ -1,9 +1,12 @@
+import random
 import sys
 import os
 import time
 import numpy as np
 from os.path import join, exists
 import glob
+
+from torch import Tensor, cuda, squeeze, chunk, cat, stack
 from tqdm import trange, tqdm
 import cv2
 import math
@@ -12,6 +15,7 @@ import torch
 from torch.nn import functional as F
 import json
 
+from core import imresize
 from mytest.numpy_test import numpy_test
 
 
@@ -52,8 +56,8 @@ def DUF_downsample(x, scale=4):
         # gaussian-smooth the dirac, resulting in a gaussian filter mask
         return fi.gaussian_filter(inp, nsig)
 
-    B, T, C, H, W = x.size()
-    x = x.view(-1, 1, H, W)
+    B, T, C, H, W = x.size()  # torch.Size([1, 3, 9, 512, 960])
+    x = x.view(-1, 1, H, W)  # torch.Size([27, 1, 512, 960])
     filter_height, filter_width = 13, 13
     pad_w, pad_h = (filter_width - 1) // 2, (filter_height - 1) // 2  # 6 is the pad of the gaussian filter
     r_h, r_w = 0, 0
@@ -70,12 +74,15 @@ def DUF_downsample(x, scale=4):
     return x
 
 
-def makelr_fromhr_cuda(hr, scale=4, device=None, data_kind='single'):
+def makelr_fromhr_cuda(hr, scale=4, device=None, data_kind='single', down_sample='bi'):
     if data_kind == 'double' or isinstance(hr, (tuple, list)):
         return [i.to(device) for i in hr]
     else:
         hr = hr.to(device)
-        lr = DUF_downsample(hr, scale)
+        if down_sample == 'bi':
+            lr = BI_downsample(hr, scale)
+        else:
+            lr = DUF_downsample(hr, scale)
         return lr, hr
 
 
@@ -102,23 +109,30 @@ def evaluation(model, eval_data, config):
     bd = 2
 
     for iter_eval, (img_hq) in enumerate(tqdm(eval_data)):
-        img_hq = img_hq[:, :, :, bd * scale: (bd + in_h) * scale, bd * scale: (bd + in_w) * scale]
-        # img_hq: torch.Size([1, 3, 9, 512, 960])
-        img_lq, img_hq = makelr_fromhr_cuda(img_hq, scale, device, config.data_kind)
+        img_hq = img_hq[:, :, :, int(bd * scale + 0.5): int((bd + in_h) * scale + 0.5), int(bd * scale + 0.5): int((bd + in_w) * scale + 0.5)]
+        # img_hq: torch.Size([1, 3, 9, bd:2 * scale:4 : (bd:2 + in_h:128)*scale:4 = 512, 960])
+        img_lq, img_hq = makelr_fromhr_cuda(img_hq, scale, device, config.data_kind, config.data_downsample)
         # img_lq = img_lq[:, :, :, :in_h, :in_w]
         # img_hq = img_hq[:, :, :, :in_h*scale, :in_w*scale]
 
-        B, C, T, H, W = img_lq.shape    # img_lq: torch.Size([1, 3, 9, 128, 240])
+        B, C, T, H, W = img_lq.shape  # img_lq: torch.Size([1, 3, 9, 128, 240])
+        # B, T, C, H, W = img_lq.shape    # torch.Size([1, 9, 3, 130, 244])   scale=3.5
 
         start.record()
         with torch.no_grad():
             img_clean = model(img_lq)
             # print("img_clean = ", img_clean.size())
+        if type(scale) is not int:
+            img_clean_resize = [BI_resize(_, (img_hq.size(3), img_hq.size(4)))
+                                for _ in img_clean]
+        else:
+            img_clean_resize = img_clean
         end.record()
-        torch.cuda.synchronize()    # test model inference time more correct
+        torch.cuda.synchronize()  # test model inference time more correct
         test_runtime.append(start.elapsed_time(end) / T)
 
-        cleans = [_.permute(0, 2, 3, 4, 1) for _ in img_clean]
+        # cleans = [_.permute(0, 2, 3, 4, 1) for _ in img_clean]
+        cleans = [_.permute(0, 2, 3, 4, 1) for _ in img_clean_resize]
         # print("len(cleans) = ", len(cleans))      # len(cleans) = 2
         hr = img_hq.permute(0, 2, 3, 4, 1)
         # print("hr = ", hr.size())     # hr = torch.Size([1, 9, 512, 960, 3])
@@ -126,7 +140,7 @@ def evaluation(model, eval_data, config):
         psnr_cleans, psnr_hr = cleans, hr
         psnrs = [compute_psnr_torch(_, psnr_hr).cpu().numpy() for _ in psnr_cleans]
         # numpy_test(cleans[0].cpu().numpy())      # test
-        if config.eval.save_all_sr == 1:    # save all SR sequences
+        if config.eval.save_all_sr == 1:  # save all SR sequences
             save_all_srframe(cleans, config)
         else:
             clean = (np.round(np.clip(cleans[0].cpu().numpy()[0, T // 2] * 255, 0, 255))).astype(np.uint8)
@@ -215,7 +229,7 @@ def save_checkpoint_psnr(model, epoch, model_folder, psnr):
 
 
 def save_checkpoint(model, epoch, model_folder):
-    model_out_path = os.path.join(model_folder , '{:0>4}.pth'.format(epoch))
+    model_out_path = os.path.join(model_folder, '{:0>4}.pth'.format(epoch))
     state = {"epoch": epoch, "model": model.state_dict()}
     if not os.path.exists(model_folder):
         os.makedirs(model_folder)
@@ -271,7 +285,7 @@ def cv2_imsave(img_path, img):
 
 
 def cv2_imread(img_path):
-    img = cv2.imread(img_path)
+    img = cv2.imread(img_path)  # img.shape = {tuple}(792, 1920, 3)
     if img.ndim == 3:
         img = img[:, :, [2, 1, 0]]
     return img
@@ -291,7 +305,81 @@ class DICT2OBJ(object):
                 setattr(self, k, v)
 
 
+def BI_resize(x: Tensor, size):
+    if cuda.is_available() and (not x.is_cuda):
+        x = x.cuda()
+
+    # B, C, T, H, W --> B, T, C, H, W
+    x = x.permute(0, 2, 1, 3, 4).contiguous()
+    B, T, C, H, W = x.size()
+
+    x = x.view(-1, C, H, W)
+    x = imresize(x, sizes=size)
+
+    x = x.view(B, T, C, x.size(2), x.size(3))
+    x = x.permute(0, 2, 1, 3, 4).contiguous()
+
+    return x
+
+
+def BI_downsample(x: Tensor, scale: float = 4.0):
+    """Bicubic Downsamping with used in bicubic_pytorch code
+
+    Args:
+        x (Tensor, [B, T, C, H, W]): frames to be downsampled.
+        scale (float): downsampling factor: (1.0, 4.0].
+
+    Returns:
+        x (Tensor, [B, T, C, H/scale, W/scale]): frames after downsampled.
+    """
+    if cuda.is_available() and (not x.is_cuda):
+        x = x.cuda()
+
+    # print("input x.shape =", x.size())
+    # B, C, T, H, W --> B, T, C, H, W
+    x = x.permute(0, 2, 1, 3, 4).contiguous()
+    B, T, C, H, W = x.size()
+    # print("after permute x.shape =", x.size())
+    # print("T =", T)
+
+    scale_1 = round(1 / scale, 3)
+    # print("scale_1:", scale_1)
+    down_H = int(H / scale + 0.5)
+    down_W = int(W / scale + 0.5)
+
+    x = x.view(-1, C, H, W)
+    # print("after view:", x.size())
+    x = imresize(x, sizes=(down_H, down_W))
+    # print("after resize:", x.size())
+
+    x = x.view(B, T, C, x.size(2), x.size(3))
+    x = x.permute(0, 2, 1, 3, 4).contiguous()
+    # print("after view and permute:", x.size())
+
+    return x
+
+
 if __name__ == '__main__':
     # print('{:0>4}_psnr-{:.4f}.pth'.format(1, 31.11119999))
     # test_video()
-    pass
+    test_x = torch.arange(16 * 3 * 9 * 24 * 24).float().view(16, 3, 9, 24, 24)
+    scale = [s / 10 for s in list(range(11, 41, 1))]
+    for i in range(100):
+        idx_scale = random.randrange(0, len(scale))
+        print(scale[idx_scale])
+        resize_x = BI_downsample(test_x, scale[idx_scale])
+        # print("resize_x:", resize_x.size())
+        print("~" * 100)
+
+    # b, t, c, h, w
+    # channel = 3
+    # T = 5
+    # test_tc = torch.arange(2*T*channel*4*4).float().view(2, T, channel, 4, 4)
+    # test_ct = torch.arange(2*channel*T*4*4).float().view(2, channel, T, 4, 4)
+    #
+    # resize_tc = BI_downsample(test_tc, 2.0)
+    # print("="*100)
+    # resize_ct = BI_downsample(test_ct, 2.0)
+    #
+    # print("resize_tc = \n", resize_tc)
+    # print("resize_ct = \n", resize_ct)
