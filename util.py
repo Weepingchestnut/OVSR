@@ -100,7 +100,7 @@ def evaluation(model, eval_data, config):
     end = torch.cuda.Event(enable_timing=True)
 
     psnr_all = []
-    scale = config.model.scale
+    scale = config.model.val_scale
     epoch = config.train.epoch
     device = config.device
     test_runtime = []

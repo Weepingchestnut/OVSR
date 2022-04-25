@@ -15,6 +15,7 @@ path:
 gpus: [0]
 #gpu_id: 0
 data_kind: 'single'    # single for hr only, double for lr and hr
+data_downsample: 'bi'     # bi: bicubic_pytorch; bd: duf_downsample
 
 train:
   resume: -999           # -999 to load the latest checkpoint
@@ -39,15 +40,16 @@ eval:
   save_all_sr: 0          # 1: save all SR sequence; 0: only save one SR frame
 
 test:
-  save_name: 'govsr_4+2_56_vid4_calendar'       # name to save test results
+  save_name: 'meta-govsr_4+2_56_bi'       # name to save test results
 
 model:
-  file: 'ovsr'                    # name of model file (models/ovsr.py)
-  name: 'govsr_4+2_56'            # name to save/load checkpoint and evaluation, change it for different settings
+  file: 'metaovsr'                    # name of model file (models/ovsr.py)
+  name: 'meta-govsr_4+2_56'            # name to save/load checkpoint and evaluation, change it for different settings
   kind: 'global'                  # local or global
   meta_upscale: 1                 # 1: use meta-upscale module; 0: use official upscale module
   num_frame: 3                    # we adopt one frame from the past, present, and future respectively
-  scale: 4
+  train_scale: [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0]
+  val_scale: 3.5
   num_pb: 4                       # number of residual blocks in the precursor
   num_sb: 2                       # number of residual blocks in the successor
   basic_filter: 56                # number of filters for conv layer

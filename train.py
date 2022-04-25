@@ -19,7 +19,7 @@ from torch import autograd
 from util import automkdir, adjust_learning_rate, evaluation, load_checkpoint, save_checkpoint, makelr_fromhr_cuda, \
     test_video, save_checkpoint_psnr, BI_resize
 import dataloader
-from models.common import weights_init, cha_loss
+from models.common import weights_init, cha_loss, input_matrix_wpn
 
 
 def setup(rank, world_size):
@@ -78,20 +78,24 @@ def train(rank, config):
     train_batch_size = config.train.batch_size // world_size + max(min(config.train.batch_size % world_size - rank, 1),
                                                                    0)
     train_dataset = dataloader.loader(config.path.train, data_kind=config.data_kind, mode='train',
-                                      scale=config.model.scale,
+                                      scale=config.model.train_scale,
                                       crop_size=config.train.in_size, num_frame=config.train.num_frame)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True,
                                                num_workers=config.train.num_workers,
                                                pin_memory=True, drop_last=True)
 
     eval_dataset = dataloader.loader(config.path.eval, data_kind=config.data_kind, mode='eval',
-                                     scale=config.model.scale,
+                                     scale=config.model.val_scale,
                                      num_frame=config.train.num_frame)
     eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=config.eval.batch_size, shuffle=False,
                                               num_workers=config.eval.num_workers,
                                               pin_memory=True)
     loss_frame_seq = list(range(config.train.sub_frame, config.train.num_frame - config.train.sub_frame))
     alpha = config.train.alpha
+    """
+    # the index of scale
+    """
+    idx_scale = 0
 
     while epoch < config.train.num_epochs:
         if step == 0:
@@ -105,8 +109,22 @@ def train(rank, config):
             adjust_learning_rate(config.train.init_lr, config.train.final_lr, epoch, epoch_decay, step % iter_per_epoch,
                                  iter_per_epoch, optimizer, False)
             optimizer.zero_grad()
+            """
+            # 随机选取当前iter的尺度
+            """
+            idx_scale = random.randrange(0, len(config.model.train_scale))
+            iter_scale = config.model.train_scale[idx_scale]
 
-            img_lq, img_hq = makelr_fromhr_cuda(img_hq, config.model.scale, device, config.data_kind, config.data_downsample)
+            # img_lq, img_hq = makelr_fromhr_cuda(img_hq, config.model.scale, device, config.data_kind, config.data_downsample)
+            img_lq, img_hq = makelr_fromhr_cuda(img_hq, iter_scale, device, config.data_kind,
+                                                config.data_downsample)
+            """
+            # get the position matrix, mask
+            """
+            B, T, C, H, W = img_lq.size()
+            _, _, _, outH, outW = img_hq.size()
+            scale_coord_map, mask = input_matrix_wpn(H, W, iter_scale)  # get the position matrix, mask
+
 
             with autocast():  # Automatic Mixed Precision Training
                 it_all, pre_it_all = model(img_lq, config.train.sub_frame)
