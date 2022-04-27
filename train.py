@@ -39,8 +39,8 @@ def setup(rank, world_size):
         )
     else:
         os.environ['MASTER_ADDR'] = 'localhost'
-        os.environ['MASTER_PORT'] = '23456'
-        # os.environ['MASTER_PORT'] = '29501'
+        # os.environ['MASTER_PORT'] = '23456'
+        os.environ['MASTER_PORT'] = '23458'
 
         # initialize the process group
         dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -92,10 +92,6 @@ def train(rank, config):
                                               pin_memory=True)
     loss_frame_seq = list(range(config.train.sub_frame, config.train.num_frame - config.train.sub_frame))
     alpha = config.train.alpha
-    """
-    # the index of scale
-    """
-    idx_scale = 0
 
     while epoch < config.train.num_epochs:
         if step == 0:
@@ -105,7 +101,7 @@ def train(rank, config):
                 evaluation(model, eval_loader, config)
             time_start = time.time()
 
-        for iteration, (img_hq) in enumerate(train_loader):
+        for iteration, (img_hq) in enumerate(train_loader):     # img_hq: torch.Size([16, 3, 9, 256, 256])
             adjust_learning_rate(config.train.init_lr, config.train.final_lr, epoch, epoch_decay, step % iter_per_epoch,
                                  iter_per_epoch, optimizer, False)
             optimizer.zero_grad()
@@ -114,21 +110,15 @@ def train(rank, config):
             """
             idx_scale = random.randrange(0, len(config.model.train_scale))
             iter_scale = config.model.train_scale[idx_scale]
+            hr_size = int(config.train.in_size * iter_scale + 0.5)      # 四舍五入
 
             # img_lq, img_hq = makelr_fromhr_cuda(img_hq, config.model.scale, device, config.data_kind, config.data_downsample)
-            img_lq, img_hq = makelr_fromhr_cuda(img_hq, iter_scale, device, config.data_kind,
-                                                config.data_downsample)
-            """
-            # get the position matrix, mask
-            """
-            B, T, C, H, W = img_lq.size()
-            _, _, _, outH, outW = img_hq.size()
-            scale_coord_map, mask = input_matrix_wpn(H, W, iter_scale)  # get the position matrix, mask
-
+            img_lq, img_hq = makelr_fromhr_cuda(img_hq, hr_size, iter_scale, device, config.data_kind,
+                                                config.data_downsample)     # lq: 64 x 64; hq: 64*scale x 64*scale
 
             with autocast():  # Automatic Mixed Precision Training
-                it_all, pre_it_all = model(img_lq, config.train.sub_frame)
-                if type(config.model.scale) is not int:
+                it_all, pre_it_all = model(img_lq, iter_scale, config.train.sub_frame)
+                if type(iter_scale) is not int:
                     it_all = BI_resize(it_all, (img_hq.size(3), img_hq.size(4)))
                     pre_it_all = BI_resize(pre_it_all, (img_hq.size(3), img_hq.size(4)))
 
@@ -168,7 +158,7 @@ def train(rank, config):
                     # if psnr_avg > max_psnr:
                     #     save_checkpoint_psnr(model, epoch, config.path.checkpoint, psnr_avg)
                     #     max_psnr = psnr_avg
-                    print("="*100)
+                    print("=" * 100)
 
                 dist.barrier()
                 if rank == 0:

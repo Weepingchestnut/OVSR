@@ -95,19 +95,17 @@ class Pos2Weight(nn.Module):
 
 
 class MetaUpscale(nn.Module):
-    def __init__(self, scale: float, planes: int = 64, act_mode: str = 'relu', use_affine: bool = True):
+    def __init__(self, planes: int = 64):
         super(MetaUpscale, self).__init__()
-        self.scale = scale
-        # self.scale_int = math.ceil(self.scale)
         self.P2W = Pos2Weight(inC=planes)
 
-    def forward(self, x, res, pos_mat):
+    def forward(self, x, pos_mat, scale):
         local_weight = self.P2W(pos_mat.view(pos_mat.size(1), -1))  # (outH*outW, outC*inC*kernel_size*kernel_size)
-        up_x = self.repeat_x(res)   # the output is (N*r*r,inC,inH,inW)
+        up_x = self.repeat_x(x, scale)   # the output is (N*r*r,inC,inH,inW)
 
         # N*r^2 x [inC * kH * kW] x [inH * inW]
         cols = F.unfold(up_x, 3, padding=1)
-        scale_int = math.ceil(self.scale)
+        scale_int = math.ceil(scale)
 
         cols = cols.contiguous().view(cols.size(0) // (scale_int ** 2), scale_int ** 2, cols.size(1), cols.size(2),
                                       1).permute(0, 1, 3, 4, 2).contiguous()
@@ -125,15 +123,16 @@ class MetaUpscale(nn.Module):
 
         return out
 
-    def repeat_x(self, x):
-        scale_int = math.ceil(self.scale)
+    @staticmethod
+    def repeat_x(x, scale):
+        scale_int = math.ceil(scale)
         N, C, H, W = x.size()
         x = x.view(N, C, H, 1, W, 1)
 
         x = torch.cat([x] * scale_int, 3)
         x = torch.cat([x] * scale_int, 5).permute(0, 3, 5, 1, 2, 4)
 
-        return x.contigupus().view(-1, C, H, W)
+        return x.contiguous().view(-1, C, H, W)
 
 
 def input_matrix_wpn(inH, inW, scale, add_scale=True):
@@ -141,7 +140,7 @@ def input_matrix_wpn(inH, inW, scale, add_scale=True):
     inH, inW: the size of the feature maps
     scale: is the upsampling times
     """
-    outH, outW = int(scale * inH), int(scale * inW)
+    outH, outW = int(scale * inH + 0.5), int(scale * inW + 0.5)
 
     # mask records which pixel is invalid, 1 valid or o invalid,
     # h_offset and w_offset calculate the offset to generate the input matrix

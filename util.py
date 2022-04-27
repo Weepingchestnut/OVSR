@@ -12,6 +12,7 @@ import cv2
 import math
 import scipy
 import torch
+import torchvision.transforms as T
 from torch.nn import functional as F
 import json
 
@@ -74,11 +75,15 @@ def DUF_downsample(x, scale=4):
     return x
 
 
-def makelr_fromhr_cuda(hr, scale=4, device=None, data_kind='single', down_sample='bi'):
+def makelr_fromhr_cuda(hr, hr_size=None, scale=4, device=None, data_kind='single', down_sample='bi'):
     if data_kind == 'double' or isinstance(hr, (tuple, list)):
         return [i.to(device) for i in hr]
     else:
         hr = hr.to(device)
+        if hr_size is not None:
+            # 裁剪HR适配LR*scale
+            cropper_hr = T.RandomCrop(size=(hr_size, hr_size))
+            hr = cropper_hr(hr)
         if down_sample == 'bi':
             lr = BI_downsample(hr, scale)
         else:
@@ -108,10 +113,11 @@ def evaluation(model, eval_data, config):
     in_w = 240
     bd = 2
 
-    for iter_eval, (img_hq) in enumerate(tqdm(eval_data)):
+    for iter_eval, (img_hq) in enumerate(tqdm(eval_data)):      # img_hq:
         img_hq = img_hq[:, :, :, int(bd * scale + 0.5): int((bd + in_h) * scale + 0.5), int(bd * scale + 0.5): int((bd + in_w) * scale + 0.5)]
         # img_hq: torch.Size([1, 3, 9, bd:2 * scale:4 : (bd:2 + in_h:128)*scale:4 = 512, 960])
-        img_lq, img_hq = makelr_fromhr_cuda(img_hq, scale, device, config.data_kind, config.data_downsample)
+        img_lq, img_hq = makelr_fromhr_cuda(hr=img_hq, scale=scale, device=device, data_kind=config.data_kind,
+                                            down_sample=config.data_downsample)
         # img_lq = img_lq[:, :, :, :in_h, :in_w]
         # img_hq = img_hq[:, :, :, :in_h*scale, :in_w*scale]
 
@@ -120,7 +126,7 @@ def evaluation(model, eval_data, config):
 
         start.record()
         with torch.no_grad():
-            img_clean = model(img_lq)
+            img_clean = model(img_lq, scale)
             # print("img_clean = ", img_clean.size())
         if type(scale) is not int:
             img_clean_resize = [BI_resize(_, (img_hq.size(3), img_hq.size(4)))
@@ -342,7 +348,6 @@ def BI_downsample(x: Tensor, scale: float = 4.0):
     # print("after permute x.shape =", x.size())
     # print("T =", T)
 
-    scale_1 = round(1 / scale, 3)
     # print("scale_1:", scale_1)
     down_H = int(H / scale + 0.5)
     down_W = int(W / scale + 0.5)
@@ -362,14 +367,14 @@ def BI_downsample(x: Tensor, scale: float = 4.0):
 if __name__ == '__main__':
     # print('{:0>4}_psnr-{:.4f}.pth'.format(1, 31.11119999))
     # test_video()
-    test_x = torch.arange(16 * 3 * 9 * 24 * 24).float().view(16, 3, 9, 24, 24)
-    scale = [s / 10 for s in list(range(11, 41, 1))]
-    for i in range(100):
-        idx_scale = random.randrange(0, len(scale))
-        print(scale[idx_scale])
-        resize_x = BI_downsample(test_x, scale[idx_scale])
-        # print("resize_x:", resize_x.size())
-        print("~" * 100)
+    # test_x = torch.arange(16 * 3 * 9 * 24 * 24).float().view(16, 3, 9, 24, 24)
+    # scale = [s / 10 for s in list(range(11, 41, 1))]
+    # for i in range(100):
+    #     idx_scale = random.randrange(0, len(scale))
+    #     print(scale[idx_scale])
+    #     resize_x = BI_downsample(test_x, scale[idx_scale])
+    #     # print("resize_x:", resize_x.size())
+    #     print("~" * 100)
 
     # b, t, c, h, w
     # channel = 3
@@ -383,3 +388,31 @@ if __name__ == '__main__':
     #
     # print("resize_tc = \n", resize_tc)
     # print("resize_ct = \n", resize_ct)
+
+    """
+    # 随机裁剪测试
+    """
+    test_x = torch.arange(1 * 1 * 3 * 10 * 10).float().view(1, 1, 3, 10, 10)
+    print(test_x)
+    print("~"*100)
+    cropper = T.RandomCrop(size=(9, 9))
+    # crops = [cropper(test_x) for _ in range(4)]
+    for _ in range(4):
+        crop_x = cropper(test_x)
+        print(crop_x)
+        print(crop_x.size())
+        print("="*100)
+
+    """
+    # 尺度转换过程中是否会产生不一致测试
+    """
+    # scale = [s / 10 for s in list(range(11, 41, 1))]
+    # print(scale)
+    # for i in range(len(scale)):
+    #     hr_size = int(scale[i] * 64 + 0.5)
+    #     print(hr_size)
+    #     down_size = int(hr_size / scale[i] + 0.5)
+    #     print(down_size)
+    #     print("="*50)
+
+
