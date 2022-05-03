@@ -23,9 +23,9 @@ train:
   sub_frame: 1           # number of frames at the beginning and the end not used for computing the loss during training
   batch_size: 3
   in_size: 64            # patch_size of LR frames during training
-  init_lr: 1.e-3         # initial learning rate, and you may lower it
-  final_lr: 1.e-4        # decays to the final learning rate after {epoch_decay} epochs
-  epoch_decay: 240       # number of epochs from init_lr to final_lr
+  init_lr: 1.e-4         # initial learning rate, and you may lower it
+  final_lr: 1.e-5        # decays to the final learning rate after {epoch_decay} epochs
+  epoch_decay: 640       # number of epochs from init_lr to final_lr [0, 240] [400, 640]
   loss: 'cha_loss'       # cha_loss, MSELoss, L1Loss
   alpha: 0.01            # hyper-parameter to adjust the weight of precursor in loss, 0.01 and 0.1 for global and local should be fine
   num_epochs: 1000        # max number of epochs for training
