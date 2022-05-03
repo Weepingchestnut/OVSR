@@ -1,4 +1,3 @@
-import random
 import sys
 import os
 import time
@@ -6,7 +5,7 @@ import numpy as np
 from os.path import join, exists
 import glob
 
-from torch import Tensor, cuda, squeeze, chunk, cat, stack
+from torch import Tensor, cuda
 from tqdm import trange, tqdm
 import cv2
 import math
@@ -17,7 +16,6 @@ from torch.nn import functional as F
 import json
 
 from core import imresize
-from mytest.numpy_test import numpy_test
 
 
 def automkdir(path):
@@ -57,8 +55,8 @@ def DUF_downsample(x, scale=4):
         # gaussian-smooth the dirac, resulting in a gaussian filter mask
         return fi.gaussian_filter(inp, nsig)
 
-    B, T, C, H, W = x.size()  # torch.Size([1, 3, 9, 512, 960])
-    x = x.view(-1, 1, H, W)  # torch.Size([27, 1, 512, 960])
+    B, T, C, H, W = x.size()
+    x = x.view(-1, 1, H, W)
     filter_height, filter_width = 13, 13
     pad_w, pad_h = (filter_width - 1) // 2, (filter_height - 1) // 2  # 6 is the pad of the gaussian filter
     r_h, r_w = 0, 0
@@ -80,8 +78,8 @@ def makelr_fromhr_cuda(hr, hr_size=None, scale=4, device=None, data_kind='single
         return [i.to(device) for i in hr]
     else:
         hr = hr.to(device)
+        # 裁剪 hr 以适配 lr*scale
         if hr_size is not None:
-            # 裁剪HR适配LR*scale
             cropper_hr = T.RandomCrop(size=(hr_size, hr_size))
             hr = cropper_hr(hr)
         if down_sample == 'bi':
@@ -91,68 +89,48 @@ def makelr_fromhr_cuda(hr, hr_size=None, scale=4, device=None, data_kind='single
         return lr, hr
 
 
-def save_all_srframe(cleans, config):
-    sr_all = [(np.round(np.clip(cleans[0].cpu().numpy()[0, i] * 255, 0, 255))).astype(np.uint8)
-              for i in range(config.train.num_frame)]
-    # print("sr_all[0].shape: ", sr_all[0].shape)
-    for num_frames in range(config.train.num_frame):
-        cv2_imsave(join(config.path.eval_result, '{:0>4}.png'.format(num_frames)), sr_all[num_frames])
-
-
 def evaluation(model, eval_data, config):
     model.eval()
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
 
     psnr_all = []
-    scale = config.model.val_scale
+    scale = config.eval.scale
     epoch = config.train.epoch
     device = config.device
     test_runtime = []
     in_h = 128
     in_w = 240
     bd = 2
+    print("evaluation scale:", scale)
 
-    for iter_eval, (img_hq) in enumerate(tqdm(eval_data)):      # img_hq:
+    for iter_eval, (img_hq) in enumerate(tqdm(eval_data)):
+        # img_hq = img_hq[:, :, :, bd * scale: (bd + in_h) * scale, bd * scale: (bd + in_w) * scale]
         img_hq = img_hq[:, :, :, int(bd * scale + 0.5): int((bd + in_h) * scale + 0.5), int(bd * scale + 0.5): int((bd + in_w) * scale + 0.5)]
-        # img_hq: torch.Size([1, 3, 9, bd:2 * scale:4 : (bd:2 + in_h:128)*scale:4 = 512, 960])
         img_lq, img_hq = makelr_fromhr_cuda(hr=img_hq, scale=scale, device=device, data_kind=config.data_kind,
                                             down_sample=config.data_downsample)
         # img_lq = img_lq[:, :, :, :in_h, :in_w]
         # img_hq = img_hq[:, :, :, :in_h*scale, :in_w*scale]
 
-        B, C, T, H, W = img_lq.shape  # img_lq: torch.Size([1, 3, 9, 128, 240])
-        # B, T, C, H, W = img_lq.shape    # torch.Size([1, 9, 3, 130, 244])   scale=3.5
+        B, C, T, H, W = img_lq.shape
 
         start.record()
         with torch.no_grad():
-            img_clean = model(img_lq, scale)
-            # print("img_clean = ", img_clean.size())
-        if type(scale) is not int:
-            img_clean_resize = [BI_resize(_, (img_hq.size(3), img_hq.size(4)))
-                                for _ in img_clean]
-        else:
-            img_clean_resize = img_clean
+            img_clean = model(x=img_lq, scale=scale)
+        if img_clean[0].size(3) != img_hq.size(3) or img_clean[0].size(4) != img_hq.size(4):
+            img_clean = [BI_resize(_, (img_hq.size(3), img_hq.size(4))) for _ in img_clean]
         end.record()
-        torch.cuda.synchronize()  # test model inference time more correct
+        torch.cuda.synchronize()
         test_runtime.append(start.elapsed_time(end) / T)
 
-        # cleans = [_.permute(0, 2, 3, 4, 1) for _ in img_clean]
-        cleans = [_.permute(0, 2, 3, 4, 1) for _ in img_clean_resize]
-        # print("len(cleans) = ", len(cleans))      # len(cleans) = 2
+        cleans = [_.permute(0, 2, 3, 4, 1) for _ in img_clean]
         hr = img_hq.permute(0, 2, 3, 4, 1)
-        # print("hr = ", hr.size())     # hr = torch.Size([1, 9, 512, 960, 3])
 
         psnr_cleans, psnr_hr = cleans, hr
         psnrs = [compute_psnr_torch(_, psnr_hr).cpu().numpy() for _ in psnr_cleans]
-        # numpy_test(cleans[0].cpu().numpy())      # test
-        if config.eval.save_all_sr == 1:  # save all SR sequences
-            save_all_srframe(cleans, config)
-        else:
-            clean = (np.round(np.clip(cleans[0].cpu().numpy()[0, T // 2] * 255, 0, 255))).astype(np.uint8)
-            cv2_imsave(join(config.path.eval_result, '{:0>4}.png'.format(iter_eval)), clean)
-        # clean = (np.round(np.clip(cleans[0].cpu().numpy()[0, T // 2] * 255, 0, 255))).astype(np.uint8)
-        # cv2_imsave(join(config.path.eval_result, '{:0>4}.png'.format(iter_eval)), clean)
+
+        clean = (np.round(np.clip(cleans[0].cpu().numpy()[0, T // 2] * 255, 0, 255))).astype(np.uint8)
+        cv2_imsave(join(config.path.eval_result, '{:0>4}.png'.format(iter_eval)), clean)
         psnr_all.append(psnrs)
 
     psnrs = np.array(psnr_all)
@@ -195,7 +173,7 @@ def test_video(model, path, savepath, config):
         img_lq = [cv2_imread(i) for i in imgs]
         img_lq = torch.from_numpy(np.array(img_lq)).float().permute(3, 0, 1, 2).contiguous() / 255.
         img_lq = img_lq.to(device).unsqueeze(0)
-    B, C, T, H, W = img_lq.shape
+    B, C, T, H, W = img_lq.shape  # torch.Size([1, 3, 41, 144, 180])
 
     files_info = [os.path.split(_)[-1] for _ in imgs]
 
@@ -207,13 +185,153 @@ def test_video(model, path, savepath, config):
     test_runtime.append(start.elapsed_time(end))  # milliseconds
 
     if isinstance(img_clean, tuple):
-        img_clean = img_clean[0]
+        img_clean = img_clean[0]  # torch.Size([1, 3, 41, 576, 720])
 
-    sr = img_clean[0].permute(1, 2, 3, 0)
-    sr = sr.cpu().numpy()
+    """
+    # calculate PSNR
+    """
+    psnr_clean = img_clean.permute(0, 2, 3, 4, 1)  # torch.Size([1, 41, 576, 720, 3])
+    psnr_hr = img_hq.unsqueeze(0).permute(0, 2, 3, 4, 1)  # torch.Size([1, 41, 576, 720, 3])
+    psnr = compute_psnr_torch(psnr_clean, psnr_hr).cpu().numpy()
+
+    sr = img_clean[0].permute(1, 2, 3, 0)  # torch.Size([41, 576, 720, 3])
+    sr = sr.cpu().numpy()  # (41, 576, 720, 3)
     sr = (np.round(np.clip(sr * 255, 0, 255))).astype(np.uint8)
     [cv2_imsave(join(savepath, files_info[i]), sr[i]) for i in range(T)]
     print('Cost {} ms in average.\n'.format(np.mean(test_runtime) / T))
+    print("PSNR:", psnr)
+
+    test_result_seq = []
+    # calculate PSNR_Y
+    for i in range(sr.shape[0]):
+        img = sr[i, ...]
+        img = img[:, :, [2, 1, 0]]  # RGB to BGR
+        img_gt = psnr_hr[:, i, ...].data.squeeze().float().cpu().clamp_(0, 1).numpy()
+        img_gt = img_gt[:, :, [2, 1, 0]]  # RGB to BGR
+        img_gt = (img_gt * 255.0).round().astype(np.uint8)  # float32 to uint8
+
+        # BGR to YCBCR
+        img = bgr2ycbcr(img.astype(np.float32) / 255.) * 255.
+        img_gt = bgr2ycbcr(img_gt.astype(np.float32) / 255.) * 255.
+
+        test_result_seq.append(calculate_psnr(img, img_gt, border=config.test.border))
+
+    psnr_y = sum(test_result_seq) / len(test_result_seq)
+    return psnr, psnr_y
+
+
+def bgr2ycbcr(img, only_y=True):
+    """bgr version of rgb2ycbcr
+    only_y: only return Y channel
+    Input:
+        uint8, [0, 255]
+        float, [0, 1]
+    """
+    in_img_type = img.dtype
+    img.astype(np.float32)
+    if in_img_type != np.uint8:
+        img *= 255.
+    # convert
+    if only_y:
+        rlt = np.dot(img, [24.966, 128.553, 65.481]) / 255.0 + 16.0
+    else:
+        rlt = np.matmul(img, [[24.966, 112.0, -18.214], [128.553, -74.203, -93.786],
+                              [65.481, -37.797, 112.0]]) / 255.0 + [16, 128, 128]
+    if in_img_type == np.uint8:
+        rlt = rlt.round()
+    else:
+        rlt /= 255.
+    return rlt.astype(in_img_type)
+
+
+'''
+# --------------------------------------------
+# metric, PSNR, SSIM and PSNRB
+# --------------------------------------------
+'''
+
+
+# --------------------------------------------
+# PSNR
+# --------------------------------------------
+def calculate_psnr(img1, img2, border=0):
+    # img1 and img2 have range [0, 255]
+    # img1 = img1.squeeze()
+    # img2 = img2.squeeze()
+    if not img1.shape == img2.shape:
+        raise ValueError('Input images must have the same dimensions.')
+    h, w = img1.shape[:2]
+    img1 = img1[border:h - border, border:w - border]
+    img2 = img2[border:h - border, border:w - border]
+
+    img1 = img1.astype(np.float64)
+    img2 = img2.astype(np.float64)
+    mse = np.mean((img1 - img2) ** 2)
+    if mse == 0:
+        return float('inf')
+    return 20 * math.log10(255.0 / math.sqrt(mse))
+
+
+# --------------------------------------------
+# SSIM
+# --------------------------------------------
+def calculate_ssim(img1, img2, border=0):
+    """calculate SSIM
+    the same outputs as MATLAB's
+    img1, img2: [0, 255]
+    """
+    # img1 = img1.squeeze()
+    # img2 = img2.squeeze()
+    if not img1.shape == img2.shape:
+        raise ValueError('Input images must have the same dimensions.')
+    h, w = img1.shape[:2]
+    img1 = img1[border:h - border, border:w - border]
+    img2 = img2[border:h - border, border:w - border]
+
+    if img1.ndim == 2:
+        return ssim(img1, img2)
+    elif img1.ndim == 3:
+        if img1.shape[2] == 3:
+            ssims = []
+            for i in range(3):
+                ssims.append(ssim(img1[:, :, i], img2[:, :, i]))
+            return np.array(ssims).mean()
+        elif img1.shape[2] == 1:
+            return ssim(np.squeeze(img1), np.squeeze(img2))
+    else:
+        raise ValueError('Wrong input image dimensions.')
+
+
+def ssim(img1, img2):
+    C1 = (0.01 * 255) ** 2
+    C2 = (0.03 * 255) ** 2
+
+    img1 = img1.astype(np.float64)
+    img2 = img2.astype(np.float64)
+    kernel = cv2.getGaussianKernel(11, 1.5)
+    window = np.outer(kernel, kernel.transpose())
+
+    mu1 = cv2.filter2D(img1, -1, window)[5:-5, 5:-5]  # valid
+    mu2 = cv2.filter2D(img2, -1, window)[5:-5, 5:-5]
+    mu1_sq = mu1 ** 2
+    mu2_sq = mu2 ** 2
+    mu1_mu2 = mu1 * mu2
+    sigma1_sq = cv2.filter2D(img1 ** 2, -1, window)[5:-5, 5:-5] - mu1_sq
+    sigma2_sq = cv2.filter2D(img2 ** 2, -1, window)[5:-5, 5:-5] - mu2_sq
+    sigma12 = cv2.filter2D(img1 * img2, -1, window)[5:-5, 5:-5] - mu1_mu2
+
+    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) *
+                                                            (sigma1_sq + sigma2_sq + C2))
+    return ssim_map.mean()
+
+
+def save_checkpoint(model, epoch, model_folder):
+    model_out_path = os.path.join(model_folder, '{:0>4}.pth'.format(epoch))
+    state = {"epoch": epoch, "model": model.state_dict()}
+    if not os.path.exists(model_folder):
+        os.makedirs(model_folder)
+    torch.save(state, model_out_path)
+    print("Checkpoint saved to {}".format(model_out_path))
 
     return
 
@@ -225,17 +343,6 @@ def save_checkpoint_psnr(model, epoch, model_folder, psnr):
     # --------------------------------------------------------------
     # model_out_path = os.path.join(model_folder, '{:0>4}.pth'.format(epoch))
     model_out_path = os.path.join(model_folder, '{:0>4}_psnr-{:.4f}.pth'.format(epoch, psnr))
-    state = {"epoch": epoch, "model": model.state_dict()}
-    if not os.path.exists(model_folder):
-        os.makedirs(model_folder)
-    torch.save(state, model_out_path)
-    print("Checkpoint saved to {}".format(model_out_path))
-
-    return
-
-
-def save_checkpoint(model, epoch, model_folder):
-    model_out_path = os.path.join(model_folder, '{:0>4}.pth'.format(epoch))
     state = {"epoch": epoch, "model": model.state_dict()}
     if not os.path.exists(model_folder):
         os.makedirs(model_folder)
@@ -266,7 +373,6 @@ def load_checkpoint(network=None, resume='', path='', weights_init=None, rank=0)
             print("=> no checkpoint found at '{}'".format(resume))
             if weights_init is not None:
                 network.apply(weights_init)
-                # print("weights_init")
             start_epoch = 0
 
     return start_epoch
@@ -291,7 +397,7 @@ def cv2_imsave(img_path, img):
 
 
 def cv2_imread(img_path):
-    img = cv2.imread(img_path)  # img.shape = {tuple}(792, 1920, 3)
+    img = cv2.imread(img_path)
     if img.ndim == 3:
         img = img[:, :, [2, 1, 0]]
     return img
@@ -316,14 +422,14 @@ def BI_resize(x: Tensor, size):
         x = x.cuda()
 
     # B, C, T, H, W --> B, T, C, H, W
-    x = x.permute(0, 2, 1, 3, 4).contiguous()
+    # x = x.permute(0, 2, 1, 3, 4).contiguous()
     B, T, C, H, W = x.size()
 
     x = x.view(-1, C, H, W)
     x = imresize(x, sizes=size)
 
     x = x.view(B, T, C, x.size(2), x.size(3))
-    x = x.permute(0, 2, 1, 3, 4).contiguous()
+    # x = x.permute(0, 2, 1, 3, 4).contiguous()
 
     return x
 
@@ -341,78 +447,17 @@ def BI_downsample(x: Tensor, scale: float = 4.0):
     if cuda.is_available() and (not x.is_cuda):
         x = x.cuda()
 
-    # print("input x.shape =", x.size())
-    # B, C, T, H, W --> B, T, C, H, W
-    x = x.permute(0, 2, 1, 3, 4).contiguous()
     B, T, C, H, W = x.size()
-    # print("after permute x.shape =", x.size())
-    # print("T =", T)
-
-    # print("scale_1:", scale_1)
     down_H = int(H / scale + 0.5)
     down_W = int(W / scale + 0.5)
 
     x = x.view(-1, C, H, W)
-    # print("after view:", x.size())
     x = imresize(x, sizes=(down_H, down_W))
-    # print("after resize:", x.size())
 
     x = x.view(B, T, C, x.size(2), x.size(3))
-    x = x.permute(0, 2, 1, 3, 4).contiguous()
-    # print("after view and permute:", x.size())
 
     return x
 
 
 if __name__ == '__main__':
-    # print('{:0>4}_psnr-{:.4f}.pth'.format(1, 31.11119999))
-    # test_video()
-    # test_x = torch.arange(16 * 3 * 9 * 24 * 24).float().view(16, 3, 9, 24, 24)
-    # scale = [s / 10 for s in list(range(11, 41, 1))]
-    # for i in range(100):
-    #     idx_scale = random.randrange(0, len(scale))
-    #     print(scale[idx_scale])
-    #     resize_x = BI_downsample(test_x, scale[idx_scale])
-    #     # print("resize_x:", resize_x.size())
-    #     print("~" * 100)
-
-    # b, t, c, h, w
-    # channel = 3
-    # T = 5
-    # test_tc = torch.arange(2*T*channel*4*4).float().view(2, T, channel, 4, 4)
-    # test_ct = torch.arange(2*channel*T*4*4).float().view(2, channel, T, 4, 4)
-    #
-    # resize_tc = BI_downsample(test_tc, 2.0)
-    # print("="*100)
-    # resize_ct = BI_downsample(test_ct, 2.0)
-    #
-    # print("resize_tc = \n", resize_tc)
-    # print("resize_ct = \n", resize_ct)
-
-    """
-    # 随机裁剪测试
-    """
-    test_x = torch.arange(1 * 1 * 3 * 10 * 10).float().view(1, 1, 3, 10, 10)
-    print(test_x)
-    print("~"*100)
-    cropper = T.RandomCrop(size=(9, 9))
-    # crops = [cropper(test_x) for _ in range(4)]
-    for _ in range(4):
-        crop_x = cropper(test_x)
-        print(crop_x)
-        print(crop_x.size())
-        print("="*100)
-
-    """
-    # 尺度转换过程中是否会产生不一致测试
-    """
-    # scale = [s / 10 for s in list(range(11, 41, 1))]
-    # print(scale)
-    # for i in range(len(scale)):
-    #     hr_size = int(scale[i] * 64 + 0.5)
-    #     print(hr_size)
-    #     down_size = int(hr_size / scale[i] + 0.5)
-    #     print(down_size)
-    #     print("="*50)
-
-
+    pass

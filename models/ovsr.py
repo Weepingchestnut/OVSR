@@ -27,26 +27,26 @@ class UNIT(nn.Module):
         print(kind, num_b)
 
     def forward(self, it, ht_past, ht_now=None, ht_future=None):
-        B, C, T, H, W = it.shape    # torch.Size([16, 3, 3, 64, 64])
+        B, C, T, H, W = it.shape    # torch.Size([B, 3, 3, 128, 240])
 
         if self.kind == 'precursor':
-            it_c = it[:, :, T // 2]     # torch.Size([16, 3, 64, 64])   get reference frame
-            index_sup = list(range(T))      # [0, 1, 2]
-            index_sup.pop(T // 2)           # [0, 2]    去除参考帧的index，即得到近邻帧的index
-            it_sup = it[:, :, index_sup]    # torch.Size([16, 3, 2, 64, 64])    get support frame
-            it_sup = it_sup.view(B, C * (T - 1), H, W)      # torch.Size([16, 6, 64, 64])   channel * (3-1)
-            hsup = self.act(self.conv_sup(it_sup))      # torch.Size([16, 56, 64, 64])  get support frame hidden states
-            hc = self.act(self.conv_c(it_c))    # torch.Size([16, 56, 64, 64])  get reference frame hidden states
-            inp = [hc, hsup, ht_past]       # 0: hc;    1: hsup;    2: ht_past
+            it_c = it[:, :, T // 2]     # torch.Size([B, 3(C), 128, 240])  get center frame
+            index_sup = list(range(T))
+            index_sup.pop(T // 2)       # [0, 2] the index of support frame
+            it_sup = it[:, :, index_sup]    # torch.Size([B, 3(C), 2(T), 128, 240])
+            it_sup = it_sup.view(B, C * (T - 1), H, W)      # torch.Size([B, 6, 128, 240])
+            hsup = self.act(self.conv_sup(it_sup))          # torch.Size([B, 80, 128, 240])     the hidden state of support frame
+            hc = self.act(self.conv_c(it_c))                # torch.Size([b, 80, 128, 240])     the hidden state of center frame
+            inp = [hc, hsup, ht_past]
         else:
             ht = [ht_past, ht_now, ht_future]
             it_c = [torch.cat([it[:, :, i, :, :], ht[i]], 1) for i in range(3)]
             inp = [self.act(self.conv_c[i](it_c[i])) for i in range(3)]
 
-        inp = self.blocks(inp)      # Residual Block    inp[0, 1, 2]: torch.Size([16, 56, 64, 64])
+        inp = self.blocks(inp)      # after some residual block
 
-        ht = self.merge(torch.cat(inp, 1))      # channel dim concat    ht: torch.Size([16, 56, 64, 64])
-        it_sr = self.upscale(ht)        # it_sr: torch.Size([16, 3, 256, 256])
+        ht = self.merge(torch.cat(inp, 1))      # Conv 3x3 to merge feature maps (Note that there no LReLU)
+        it_sr = self.upscale(ht)
 
         return it_sr, ht
 
@@ -74,29 +74,23 @@ class Net(nn.Module):
             pnum += l
         print('Number of parameters {}'.format(pnum))
 
-    def forward(self, x, start=0):
+    def forward(self, x, start=0, scale=4):
         B, C, T, H, W = x.shape
-        # B, T, C, H, W = x.shape
-        """
-            print("x.shape =", x.shape)
-            val: x.shape = torch.Size([1, 3, 9, 128, 240])
-            train: x.shape = torch.Size([16, 3, 9, 64, 64])
-        """
         start = max(0, start)
         end = T - start
 
         sr_all = []
         pre_sr_all = []
         pre_ht_all = []
-        ht_past = torch.zeros((B, self.bf, H, W), dtype=torch.float, device=x.device)   # torch.Size([16, 56, 64, 64])
+        ht_past = torch.zeros((B, self.bf, H, W), dtype=torch.float, device=x.device)
 
         # precursor
         for idx in range(T):
             t = idx if self.kind == 'local' else T - idx - 1
             insert_idx = T + 1 if self.kind == 'local' else 0
 
-            it = generate_it(x, t, self.nf, T)      # torch.Size([16, 3, 3, 64, 64])
-            it_sr_pre, ht_past = self.precursor(it, ht_past, None, None)        # it_sr_pre: torch.Size([16, 3, 256, 256]); ht_past: torch.Size([16, 56, 64, 64])
+            it = generate_it(x, t, self.nf, T)
+            it_sr_pre, ht_past = self.precursor(it, ht_past, None, None)
             pre_ht_all.insert(insert_idx, ht_past)
             pre_sr_all.insert(insert_idx, it_sr_pre)
 
@@ -109,16 +103,6 @@ class Net(nn.Module):
             sr_all.append(it_sr + pre_sr_all[t])
 
         sr_all = torch.stack(sr_all, 2)[:, :, start:]
-        """
-            print("sr_all =", sr_all.size())
-            val: sr_all = torch.Size([1, 3, 9, 512, 960])
-            train: sr_all = torch.Size([16, 3, 7, 256, 256])
-        """
         pre_sr_all = torch.stack(pre_sr_all, 2)[:, :, start:end]
-        """
-            print("pre_sr_all =", pre_sr_all.size())
-            val: pre_sr_all = torch.Size([1, 3, 9, 512, 960])
-            train: pre_sr_all = torch.Size([16, 3, 7, 256, 256])
-        """
 
         return sr_all, pre_sr_all

@@ -17,9 +17,9 @@ import torch.optim
 from torch.cuda.amp import autocast, GradScaler
 from torch import autograd
 from util import automkdir, adjust_learning_rate, evaluation, load_checkpoint, save_checkpoint, makelr_fromhr_cuda, \
-    test_video, save_checkpoint_psnr, BI_resize
+    test_video, BI_resize, save_checkpoint_psnr
 import dataloader
-from models.common import weights_init, cha_loss, input_matrix_wpn
+from models.common import weights_init, cha_loss
 
 
 def setup(rank, world_size):
@@ -39,8 +39,7 @@ def setup(rank, world_size):
         )
     else:
         os.environ['MASTER_ADDR'] = 'localhost'
-        # os.environ['MASTER_PORT'] = '23456'
-        os.environ['MASTER_PORT'] = '23458'
+        os.environ['MASTER_PORT'] = '23451'
 
         # initialize the process group
         dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -75,17 +74,16 @@ def train(rank, config):
     step = 0
     scaler = GradScaler()
 
-    train_batch_size = config.train.batch_size // world_size + max(min(config.train.batch_size % world_size - rank, 1),
-                                                                   0)
+    train_batch_size = config.train.batch_size // world_size + max(min(config.train.batch_size % world_size - rank, 1), 0)
     train_dataset = dataloader.loader(config.path.train, data_kind=config.data_kind, mode='train',
-                                      scale=config.model.train_scale,
+                                      scale=config.model.scale,
                                       crop_size=config.train.in_size, num_frame=config.train.num_frame)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True,
                                                num_workers=config.train.num_workers,
                                                pin_memory=True, drop_last=True)
 
     eval_dataset = dataloader.loader(config.path.eval, data_kind=config.data_kind, mode='eval',
-                                     scale=config.model.val_scale,
+                                     scale=config.eval.scale,
                                      num_frame=config.train.num_frame)
     eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=config.eval.batch_size, shuffle=False,
                                               num_workers=config.eval.num_workers,
@@ -98,27 +96,36 @@ def train(rank, config):
             adjust_learning_rate(config.train.init_lr, config.train.final_lr, epoch, epoch_decay, step % iter_per_epoch,
                                  iter_per_epoch, optimizer, True)
             if rank == 0:
+                # pass
                 evaluation(model, eval_loader, config)
             time_start = time.time()
 
-        for iteration, (img_hq) in enumerate(train_loader):     # img_hq: torch.Size([16, 3, 9, 256, 256])
+        for iteration, (img_hq) in enumerate(train_loader):
             adjust_learning_rate(config.train.init_lr, config.train.final_lr, epoch, epoch_decay, step % iter_per_epoch,
                                  iter_per_epoch, optimizer, False)
             optimizer.zero_grad()
+
             """
+            # 当arbitrary_scale: True
             # 随机选取当前iter的尺度
             """
-            idx_scale = random.randrange(0, len(config.model.train_scale))
-            iter_scale = config.model.train_scale[idx_scale]
-            hr_size = int(config.train.in_size * iter_scale + 0.5)      # 四舍五入
+            if config.model.arbitrary_scale:
+                idx_scale = random.randrange(0, len(config.model.scale))
+                iter_scale = config.model.scale[idx_scale]
+                # print("~"*50)
+                # print("iter_scale =", iter_scale)
+                hr_size = int(config.train.in_size * iter_scale + 0.5)
+            else:
+                iter_scale = config.model.scale
+                hr_size = img_hq.shape[3]
 
-            # img_lq, img_hq = makelr_fromhr_cuda(img_hq, config.model.scale, device, config.data_kind, config.data_downsample)
             img_lq, img_hq = makelr_fromhr_cuda(img_hq, hr_size, iter_scale, device, config.data_kind,
-                                                config.data_downsample)     # lq: 64 x 64; hq: 64*scale x 64*scale
+                                                config.data_downsample)
 
             with autocast():  # Automatic Mixed Precision Training
-                it_all, pre_it_all = model(img_lq, iter_scale, config.train.sub_frame)
-                if type(iter_scale) is not int:
+                it_all, pre_it_all = model(img_lq, config.train.sub_frame, iter_scale)
+                #
+                if (not config.model.arbitrary_scale) and (type(config.model.scale) is not int):
                     it_all = BI_resize(it_all, (img_hq.size(3), img_hq.size(4)))
                     pre_it_all = BI_resize(pre_it_all, (img_hq.size(3), img_hq.size(4)))
 
@@ -152,13 +159,9 @@ def train(rank, config):
 
                     epoch += 1
                     config.train.epoch = epoch
-                    # print("max_psnr =", max_psnr)
                     psnr_avg = evaluation(model, eval_loader, config).tolist()[0]
                     save_checkpoint_psnr(model, epoch, config.path.checkpoint, psnr_avg)
-                    # if psnr_avg > max_psnr:
-                    #     save_checkpoint_psnr(model, epoch, config.path.checkpoint, psnr_avg)
-                    #     max_psnr = psnr_avg
-                    print("=" * 100)
+                    print("="*100)
 
                 dist.barrier()
                 if rank == 0:
@@ -184,10 +187,21 @@ def test(rank, config):
     start_epoch = load_checkpoint(model, config.path.resume, config.path.checkpoint, weights_init, rank)
 
     datapath = sorted(glob.glob(join(config.path.test, '*')))
-    # datapath = [d for d in datapath if os.path.isdir(d)][rank:: world_size]
+    datapath = [d for d in datapath if os.path.isdir(d)][rank:: world_size]
     seqname = [os.path.split(d)[-1] for d in datapath]
     savepath = [join(config.path.test, d, config.test.save_name) for d in seqname]
 
+    psnr_all = []
+    psnr_y_all = []
     for i, d in enumerate(tqdm(datapath)):
         print(d, savepath[i])
-        test_video(model, d, savepath[i], config)
+        psnr, psnr_y = test_video(model, d, savepath[i], config)
+        psnr_all.append(psnr)
+        psnr_y_all.append(psnr_y)
+    psnrs = np.array(psnr_all)
+    psnrs_y = np.array(psnr_y_all)
+    psnr_avg = np.mean(psnrs, 0, keepdims=False)
+    psnr_y_avg = np.mean(psnrs_y, 0, keepdims=False)
+    print("\nPSNR:", psnr_avg)
+    print("PSNR_Y", psnr_y_avg)
+
